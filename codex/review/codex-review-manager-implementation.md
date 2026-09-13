@@ -1762,6 +1762,240 @@ diagnostics.export
 - GUI 重启并恢复活动 run 时，使用该 run 已保存的快照，不重新注入当前文件形成第二套规则。
 - 下一次新审核仍会重新读取当前源文件。
 
+### 14.7 飞书桌面端个人账号通知（可选扩展）
+
+> 实施状态：**等待实施**  
+> 优先级：**非必要**  
+> 验收关系：不属于 MVP 或正式版阻塞项；未实施、未配置或发送失败均不得影响代码审核、结果持久化及其他正式功能。
+
+该扩展面向已经登录公司飞书组织下个人账号、但无法创建或安装企业自建应用的用户。它通过 Windows 桌面自动化控制用户已登录的飞书客户端，在审核进入终态后向预先确认的联系人发送摘要消息，不依赖企业管理员权限或飞书开放平台凭证。
+
+#### 14.7.1 触发与消息范围
+
+- 默认仅在 review run 状态变为 `completed` 时触发。
+- 可以分别配置 `failed`、`interrupted` 和发现 findings 时是否通知。
+- 默认消息只包含项目名、目录、当前分支、base branch、短 HEAD、结果分类、findings 数量、最高严重级别、耗时、本次 Token 和简短摘要。
+- 默认不得发送完整代码、diff、审核要求正文、账户用量、thread ID 或任意本地文件正文。
+- “发送完整审核结果”必须是单独的显式选项，并默认关闭。
+
+#### 14.7.2 自动化架构
+
+Electron 主进程通过独立 Windows 辅助进程（建议名称 `FeishuAutomationHelper.exe`）执行桌面自动化。两者使用 JSON over stdio 通信，不监听本地 TCP 或 WebSocket 端口。辅助进程负责：
+
+1. 检测飞书是否已运行，必要时启动用户配置或自动发现的飞书客户端。
+2. 等待主窗口和可访问性树就绪。
+3. 使用 Windows UI Automation 的控件属性定位搜索框、搜索结果、聊天标题、消息输入框和发送操作。
+4. 搜索并核对已配置联系人。
+5. 填入消息并发送。
+6. 验证消息已出现在目标聊天中，再向主进程返回成功。
+
+不得把固定屏幕坐标作为主要定位方式。飞书版本升级导致控件无法可靠识别时，必须安全失败并保留待发送任务，不能在不确定的窗口或会话中继续输入。
+
+建议请求结构：
+
+~~~json
+{
+  "action": "sendMessage",
+  "recipient": {
+    "displayName": "张三",
+    "departmentHint": "支付研发部"
+  },
+  "message": "审核完成……",
+  "deduplicationKey": "review-run-id:recipient-id"
+}
+~~~
+
+#### 14.7.3 联系人确认与误发防护
+
+- 首次配置必须由用户从飞书搜索结果中确认联系人，并成功发送测试消息后才能启用自动通知。
+- 不得只按显示名称自动选择第一个结果；出现同名、多结果或部门信息不一致时必须阻止发送。
+- 保存联系人显示名、部门提示和可稳定取得的 UI 身份特征，形成发送白名单。
+- 每次发送前重新核对当前聊天标题和联系人信息。
+- 每个 `review_run_id + recipient_id` 最多成功发送一次。
+- 提供全局“立即停止自动通知”开关。
+- 自动化无法确认目标、飞书未登录、窗口异常或发送结果不确定时，状态设为失败或等待重试，不得尝试其他联系人。
+
+#### 14.7.4 持久化发件箱与恢复
+
+通知采用独立持久化发件箱，建议状态：
+
+~~~text
+pending
+opening_feishu
+locating_recipient
+sending
+sent
+retry_wait
+failed
+~~~
+
+- 建议最多重试 3 次，间隔为 10 秒、30 秒和 2 分钟。
+- GUI 重启后恢复 `pending` 与 `retry_wait` 任务。
+- 审核状态与通知状态必须分离；飞书失败只显示“审核完成，通知发送失败”。
+- 消息正文不得写入普通运行日志；诊断日志只保存模板 ID、收件人配置 ID、去重键、状态和脱敏错误。
+
+#### 14.7.5 设置界面
+
+设置页后续可增加“飞书桌面通知”区域：
+
+- 启用自动通知。
+- 飞书客户端路径与检测状态。
+- 联系人选择、重新验证和白名单。
+- 消息模板与内容预览。
+- 触发条件。
+- 是否包含结果摘要或完整结果。
+- “发送测试消息”按钮。
+- 待发送消息数量与最近一次发送状态。
+
+首个实现版本只需支持一个固定联系人、`completed` 触发和摘要消息。多个联系人、项目级覆盖、自定义模板以及完整结果发送均作为后续增强。
+
+#### 14.7.6 接收飞书审核指令
+
+后续版本可以从预先确认的飞书单聊读取严格格式的审核指令，将其转换为持久化审核请求。桌面 UI 无法像官方 API 一样稳定取得发送者的唯一 ID，因此所有入站消息均视为不可信输入。
+
+建议命令格式：
+
+~~~text
+/review repo=payment-service branch=feature/refund base=origin/main
+/review-status id=RM-1042
+/review-cancel id=RM-1042
+~~~
+
+约束：
+
+- 只读取用户明确启用并完成身份确认的单聊，不扫描所有会话。
+- 发送者必须位于入站白名单中；同名、多结果、部门不一致或身份无法再次核实时拒绝请求。
+- `repo` 只能是 GUI 中预先配置的逻辑项目别名，消息不得提供任意本地路径。
+- `remote` 只能来自项目配置的远程仓库白名单，消息不得提供 Git URL。
+- 分支名必须通过 `git check-ref-format --branch` 并按完整参数传给 Git，不能拼接到 shell 字符串。
+- 使用消息指纹和最大消息时效防止重复执行旧消息；建议默认有效期为 10 分钟。
+- 消息不得触发任意命令、脚本、模型参数、sandbox 提权或审核要求替换。
+- 默认采用“收到请求后在 GUI 确认”的安全模式。完全自动模式必须由用户显式启用，并同时满足发送者、项目、remote 和分支范围白名单。
+- 远程取消默认只允许取消尚未开始的任务；是否允许中断正在运行的审核必须单独配置，默认关闭。
+
+#### 14.7.7 持久化审核请求队列与工作目录池
+
+当可用于自动切换和审核的本地目录少于请求数量时，必须使用 SQLite 持久化队列。一个启用自动调度的 canonical Git 目录视为一个工作槽位，每个槽位同一时间最多运行一个任务。GUI 或电脑重启不得丢失排队请求。
+
+建议新增表：
+
+~~~sql
+CREATE TABLE incoming_review_requests (
+  id TEXT PRIMARY KEY,
+  inbound_message_fingerprint TEXT NOT NULL UNIQUE,
+  requester_config_id TEXT NOT NULL,
+  requester_display_name TEXT NOT NULL,
+  project_key TEXT NOT NULL,
+  requested_branch TEXT NOT NULL,
+  requested_base_branch TEXT,
+  requested_remote TEXT NOT NULL DEFAULT 'origin',
+  status TEXT NOT NULL,
+  assigned_repository_id TEXT,
+  review_run_id TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  blocked_reason TEXT,
+  received_at TEXT NOT NULL,
+  queued_at TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (assigned_repository_id) REFERENCES repositories(id),
+  FOREIGN KEY (review_run_id) REFERENCES review_runs(id)
+);
+~~~
+
+请求状态：
+
+~~~text
+received
+validated
+queued
+waiting_workspace
+preparing
+fetching
+switching
+starting_review
+reviewing
+completed
+failed
+blocked
+cancelled
+~~~
+
+状态与现有 `review_runs.status` 分离。一个入站请求可以在创建 review run 之前失败或阻塞，也可以通过 `review_run_id` 关联正式审核记录。
+
+目录调度条件：
+
+1. 目录属于请求的 `project_key`，并显式启用消息触发审核。
+2. 目录当前无审核、无未到期调度租约，且未标记为“手工使用中”。
+3. 工作区和 index 干净。
+4. 不处于 merge、rebase、cherry-pick 或 bisect 状态。
+5. 目标分支未被同一仓库的其他 worktree 占用。
+6. App Server 和全局默认审核要求均可用。
+
+多个目录可用时，优先使用已经位于目标分支的目录，其次使用最长时间未被调度的目录。任何目录被外部程序改脏时，将其标记为不可调度；不得自动 reset、clean 或 stash。
+
+多人排队时采用按请求人轮询的公平调度：同一请求人的任务保持 FIFO，不同请求人之间 round-robin。自动消息不能自行声明高优先级；只有本机 GUI 可以调整优先级。可以配置每位请求人的最大未完成任务数，防止单个用户占满队列。
+
+调度器领取任务时写入带过期时间的 lease，防止重启恢复或重复事件导致两个 worker 同时处理一个请求。启动恢复时先核对未完成 review run、实际 Git 分支和 App Server turn 状态，再决定继续、重新排队或标记 `recovery_inconclusive`。
+
+#### 14.7.8 本地不存在目标分支时的按需 fetch
+
+入站请求指定的分支可能尚未存在于本机。调度器在任务真正获得空闲目录后按以下顺序处理：
+
+1. 检查本地 `refs/heads/<branch>`。
+2. 检查本地已有的 `refs/remotes/<remote>/<branch>`。
+3. 如果仍不存在，并且该项目显式启用了“允许按需获取指定分支”，只 fetch 该精确分支。
+4. 验证远程跟踪引用存在后，创建本地跟踪分支并切换。
+5. 重新读取当前分支和 HEAD，确认与目标一致后才开始审核。
+
+等价 Git 参数数组示例：
+
+~~~text
+["fetch", "--no-tags", "origin", "refs/heads/feature/refund:refs/remotes/origin/feature/refund"]
+["switch", "--track", "-c", "feature/refund", "origin/feature/refund"]
+~~~
+
+- 默认不允许自动 fetch；必须按项目显式启用。
+- 不执行 fetch URL、通配 refspec、`pull`、force checkout、reset、clean、stash 或 push。
+- Git 子进程禁用交互式凭据提示并设置有限超时。
+- 本地同名分支已跟踪其他 upstream 时，不自动改写 upstream。
+- 远程分支不存在、尚未 push 或 fetch 失败时，将请求标记为 `blocked` 或 `failed` 并回复明确原因，不创建空分支。
+- fetch、切换分支和读取默认审核要求必须在任务实际开始时执行。排队时保存的是请求，不提前固化可能过期的 HEAD 或要求快照。
+
+#### 14.7.9 入站任务回执
+
+请求进入队列时回复请求 ID、项目、分支和当前排队位置；获得目录后回复已开始及起始 HEAD；结束后按 14.7.1 发送摘要。排队位置只能描述当前状态，不能承诺精确完成时间。
+
+示例：
+
+~~~text
+已接收审核请求 RM-1042
+当前排队位置：3
+项目：payment-service
+分支：feature/refund
+~~~
+
+~~~text
+RM-1042 已开始审核
+工作目录：review-slot-2
+HEAD：a1b2c3d
+~~~
+
+如果工作区有改动、分支不存在、身份无法确认或其他门禁不满足，必须回复未执行及具体原因。回执发送失败不能改变审核请求的事实状态；应进入独立通知发件箱重试。
+
+#### 14.7.10 可选扩展的首版边界
+
+飞书扩展首个可用版本建议分两步：
+
+1. 先实现审核结束后的单联系人摘要通知和持久化发件箱。
+2. 再实现单聊入站命令、持久化审核队列、两个或更多工作目录槽位、按需精确 fetch 和公平调度。
+
+无论实现到哪一步，该扩展都保持默认关闭和非必要状态。正式审核主流程不得依赖飞书客户端存在，也不得因为飞书窗口、登录状态或 UI 自动化失败而停止 Git 浏览和人工发起审核。
+
 ---
 
 ## 15. 左侧聊天栏互通：可选实验
@@ -2078,6 +2312,7 @@ codex-review-manager/
 - 其余设置页功能。
 - 自动更新策略。
 - 签名和发布说明。
+- 可选：飞书桌面端个人账号通知，以及由白名单单聊触发的持久化审核队列、工作目录池和按需精确 fetch。当前标记为等待实施、非必要，不阻塞 Phase 4 或正式版验收。
 
 首版建议不要把 Codex runtime 打包进应用；检测用户机器上已安装且已登录的 Codex，并提供明确安装说明。若未来内置 runtime，需要重新审查许可证、更新和认证生命周期。
 

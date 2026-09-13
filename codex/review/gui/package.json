@@ -1,0 +1,42 @@
+{
+  "name": "codex-review-manager",
+  "version": "0.1.0",
+  "description": "Safe multi-directory Git review dashboard backed by Codex App Server",
+  "author": "Codex Review Manager contributors",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "generate:schema": "node scripts/generate-app-server-schema.mjs",
+    "probe": "node scripts/phase-0a-probe.mjs",
+    "build:main": "esbuild src/main/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.cjs --external:electron --external:better-sqlite3 && esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist-electron/preload.cjs --external:electron",
+    "build": "npm run generate:schema && tsc --noEmit && npm run build:main && vite build",
+    "dev": "npm run build:main && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "start": "electron .",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "41.7.1",
+    "electron-builder": "^26.16.1",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7",
+    "vitest": "^3.0.5",
+    "wait-on": "^8.0.2"
+  }
+}

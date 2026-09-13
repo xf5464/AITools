@@ -1,0 +1,22 @@
+{
+  "phase": "0A",
+  "codexVersion": "codex-cli 0.153.4",
+  "schemaGenerated": true,
+  "schemaSha256": "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a",
+  "transport": "stdio",
+  "initialize": "passed",
+  "account": "authenticated",
+  "threadStart": "passed",
+  "turnStart": "passed",
+  "streaming": "passed",
+  "reviewRequirementsInjection": "failed",
+  "requirementsReloadOnEveryRun": "failed",
+  "tokenEvents": "passed",
+  "resumeAfterRestart": "passed",
+  "accountUsage": {
+    "supported": true,
+    "detailsRedacted": true
+  },
+  "result": "failed",
+  "note": "The probe observed completed review output, but this saved run predates exitedReviewMode marker parsing. Re-run the corrected probe before treating Phase 0A as passed."
+}

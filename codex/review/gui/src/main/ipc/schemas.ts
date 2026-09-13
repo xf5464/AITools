@@ -1,0 +1,10 @@
+import { z } from "zod";
+export const idSchema = z.string().uuid();
+export const branchSchema = z.string().min(1).max(512).refine((value) => !value.startsWith("-"), "分支名无效");
+export const displayNameSchema = z.string().trim().min(1).max(120);
+export const concurrencySchema = z.number().int().min(1).max(4);
+export const tokenGranularitySchema = z.enum(["day", "week", "month"]);
+export const goneBranchDeleteSchema = z.array(z.object({ repositoryId: idSchema, branch: branchSchema })).min(1).max(500);
+export const reasoningEffortSchema = z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+export const reviewModelConfigSchema = z.object({ model: z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9._-]+$/), reasoningEffort: reasoningEffortSchema });
+export const targetSchema = z.discriminatedUnion("type", [z.object({ type: z.literal("baseBranch"), branch: branchSchema }), z.object({ type: z.literal("uncommittedChanges") }), z.object({ type: z.literal("commit"), sha: z.string().regex(/^[0-9a-f]{7,64}$/i) }), z.object({ type: z.literal("custom"), instructions: z.string().min(1).max(100_000) })]);

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+release/
+*.db
+*.db-shm
+*.db-wal
+smoke.*.log
+packaged-smoke.*.log
+tests/fixtures/probe-repo/.git/
