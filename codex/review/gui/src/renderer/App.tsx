@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BranchTokenUsageDto, DashboardDto, RepositoryRowDto, RequirementsStatus, ReviewEvent, ReviewRunDto, ReviewTarget, TokenGranularity, TokenTrendDto } from "../shared/contracts";
+import type { BranchTokenUsageDto, DashboardDto, RepositoryRowDto, RequirementsStatus, ReviewEvent, ReviewModelConfig, ReviewRunDto, ReviewTarget, TokenGranularity, TokenTrendDto } from "../shared/contracts";
 
 const icons = { projects: "▦", history: "◷", tokens: "≋", settings: "⚙", refresh: "↻", add: "⊞", play: "▶", stop: "■", folder: "□", search: "⌕" };
 const statusText: Record<string, string> = { ready: "可以审核", reviewing: "审核中", starting: "正在启动", queued: "排队中", completed: "已完成", failed: "审核失败", stale: "结果已过期", interrupted: "已停止", not_configured: "未配置要求", blocked_requirements: "要求不可用", recovering: "正在恢复" };
-const emptyDashboard: DashboardDto = { version: 0, initialized: false, connection: "starting", requirements: { state: "not_configured" }, repositories: [], managerTokens: 0, todayTokens: 0, activeReviews: 0, queuedReviews: 0, concurrency: 1, models: [{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }], accountUsage: { supported: false } };
+const emptyDashboard: DashboardDto = { version: 0, initialized: false, connection: "starting", requirements: { state: "not_configured" }, repositories: [], managerTokens: 0, todayTokens: 0, activeReviews: 0, queuedReviews: 0, concurrency: 1, models: [{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"] }, { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] }], defaultReviewModel: { model: "gpt-5.6-sol", reasoningEffort: "medium" }, defaultMcpModel: { model: "gpt-5.6-luna", reasoningEffort: "max" }, giteaReviewQueryUrl: "", accountUsage: { supported: false } };
 
 function formatTokens(value?: number) { if (value === undefined) return "—"; if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`; if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`; return value.toLocaleString(); }
 function shortPath(path: string) { const pieces = path.split(/[\\/]/); return pieces.length > 4 ? `${pieces[0]}\\…\\${pieces.slice(-2).join("\\")}` : path; }
@@ -31,7 +31,7 @@ export function App() {
     <main>
       <div className="heading"><div><h1>{page === "projects" ? "代码审核" : page === "history" ? "审核历史" : page === "tokens" ? "Token 统计" : "设置"}</h1><p>统一管理多个本地 Git 目录及其 Codex 审核会话</p></div><div className="global-actions">
         <button className={`pill ${dashboard.connection}`} title={dashboard.connectionError ?? (dashboard.connection === "ready" ? "Codex App Server 已连接，用于启动审核、接收结果和读取账户用量。" : "点击重新连接 Codex App Server。")} onClick={() => dashboard.connection !== "ready" && void action(async () => setDashboard(await window.reviewManager.retryConnection()))}>● {dashboard.connection === "ready" ? "App Server 已连接" : dashboard.connection === "unauthenticated" ? "Codex 尚未登录" : dashboard.connection === "recovering" ? "Codex 正在恢复" : dashboard.connection === "failed" ? "Codex 连接失败（点击重试）" : "正在连接 Codex"}</button>
-        <button className={`pill requirements ${dashboard.requirements.state}`} title="查看当前全局审核要求；每轮审核开始时会重新读取该文档。" onClick={showRequirements}>▱ {dashboard.requirements.fileName ? `审核要求 · ${dashboard.requirements.fileName}` : "审核要求未配置"}</button>
+        <button className={`pill requirements ${dashboard.requirements.state}`} title="查看当前已保存的全局审核要求；替换或手动重新读取后才会更新。" onClick={showRequirements}>▱ {dashboard.requirements.fileName ? `审核要求 · ${dashboard.requirements.fileName}` : "审核要求未配置"}</button>
         <button className="secondary" title="重新读取所有目录的 Git 状态、分支和远程主干，不会 pull 或修改代码。" disabled={busy} onClick={() => action(() => window.reviewManager.refresh())}>{icons.refresh} 刷新全部</button>
         <button className="primary" title="选择并添加一个本地 Git 仓库目录到审核列表。" disabled={busy} onClick={() => action(() => window.reviewManager.addRepository())}>{icons.add} 添加目录</button>
       </div></div>
@@ -39,7 +39,7 @@ export function App() {
       {page === "projects" && <ProjectsPage dashboard={dashboard} row={row} selected={selected} setSelected={setSelected} events={events} action={action} showRequirements={showRequirements} showRunSnapshot={showRunSnapshot} showTokenTrend={() => setShowTokenTrend(true)} />}
       {page === "history" && <HistoryPage dashboard={dashboard} setSelected={(id) => { setSelected(id); setPage("projects"); }} />}
       {page === "tokens" && <TokenPage dashboard={dashboard} />}
-      {page === "settings" && <SettingsPage status={dashboard.requirements} concurrency={dashboard.concurrency} action={action} showPreview={showRequirements} />}
+      {page === "settings" && <SettingsPage dashboard={dashboard} action={action} showPreview={showRequirements} />}
     </main>
     <footer><span>ⓘ 仅按需更新设置中的远程对比分支；不会 pull、切换分支或修改代码。</span><span>GUI 原型 · 2026-09-12</span></footer>
     {preview?.preview && <div className="modal-backdrop" onMouseDown={() => setPreview(undefined)}><section className="modal" onMouseDown={(e) => e.stopPropagation()}><div><h2>审核要求预览</h2><button onClick={() => setPreview(undefined)}>×</button></div><dl><dt>路径</dt><dd>{preview.filePath}</dd><dt>SHA-256</dt><dd className="mono">{preview.sha256}</dd></dl><pre>{preview.preview}</pre></section></div>}
@@ -57,7 +57,7 @@ function ProjectsPage({ dashboard, row, selected, setSelected, events, action, s
     <Summary label="本管理器累计 Token" value={formatTokens(dashboard.managerTokens)} detail={`今日 ${formatTokens(dashboard.todayTokens)} · 仅统计本 GUI`} icon="Σ" actionLabel="查看趋势" onAction={showTokenTrend} />
     <Summary label="账户窗口用量" value={dashboard.accountUsage.supported ? `${dashboard.accountUsage.usedPercent ?? 0}%` : "账户用量不可用"} detail={dashboard.accountUsage.supported ? (dashboard.accountUsage.resetsAt ? `${new Date(dashboard.accountUsage.resetsAt * 1000).toLocaleString()} 后重置` : "账户范围") : (dashboard.accountUsage.message ?? "当前认证方式不提供")} icon="" />
   </section>
-  {dashboard.requirements.state === "not_configured" && <div className="requirements-block"><div><strong>开始审核前，请先选择全局默认审核要求文档。</strong><p>支持 UTF-8 Markdown 或文本，内容将在每次审核开始时重新读取并完整发送。</p></div><button className="primary" onClick={() => action(() => window.reviewManager.selectRequirements())}>选择文档</button></div>}
+  {dashboard.requirements.state === "not_configured" && <div className="requirements-block"><div><strong>开始审核前，请先选择全局默认审核要求文档。</strong><p>支持 UTF-8 Markdown 或文本；选择后保存内容，只有替换或手动重新读取才会更新。</p></div><button className="primary" onClick={() => action(() => window.reviewManager.selectRequirements())}>选择文档</button></div>}
   <section className="workspace"><div className="table-panel"><div className="panel-title"><strong>项目目录</strong><span>{dashboard.repositories.length} 个</span></div><div className="table-scroll"><table><thead><tr><th>项目 / HEAD</th><th>当前分支 / 对比 / 模型</th><th>Git</th><th>审核状态</th><th>Token / 轮次</th><th>操作</th></tr></thead><tbody>{dashboard.repositories.map((repository) => <RepositoryRow key={repository.id} row={repository} models={dashboard.models} selected={selected === repository.id} choose={() => setSelected(repository.id)} requirementsValid={["valid","changed"].includes(dashboard.requirements.state)} connectionReady={dashboard.connection === "ready"} action={action} />)}</tbody></table>{!dashboard.repositories.length && <div className="empty"><span className="empty-folder">▱</span><strong>尚未添加项目目录</strong><p>选择目录后，可创建或恢复 Codex 审核会话</p></div>}</div></div><ReviewDetails row={row} events={events.filter((event) => event.repositoryId === row?.id)} showRunSnapshot={showRunSnapshot} action={action} /></section></>;
 }
 
@@ -149,19 +149,56 @@ function TokenLineChart({ trend }: { trend: TokenTrendDto }) {
 
 function HistoryPage({ dashboard, setSelected }: { dashboard: DashboardDto; setSelected(id: string): void }) { const rows = dashboard.repositories.flatMap((repository) => [repository.latestRun && { repository, run: repository.latestRun }]).filter(Boolean) as Array<{repository: RepositoryRowDto; run: NonNullable<RepositoryRowDto["latestRun"]>}>; return <section className="single-panel"><h2>最近审核</h2>{rows.length ? rows.map(({repository,run}) => <button className="history-row" key={run.id} onClick={() => setSelected(repository.id)}><strong>{repository.displayName}</strong><span>{statusText[run.status]}</span><span>{new Date(run.createdAt).toLocaleString()}</span><span>{formatTokens(run.tokensUsed)} Token</span></button>) : <div className="empty">暂无审核历史</div>}</section>; }
 function TokenPage({ dashboard }: { dashboard: DashboardDto }) { return <section className="single-panel"><h2>Token 统计</h2><div className="token-grid"><Summary label="本管理器累计" value={formatTokens(dashboard.managerTokens)} detail="仅可归因于本 GUI 的 review run" icon="Σ"/><Summary label="今日 GUI 使用" value={formatTokens(dashboard.todayTokens)} detail="按本地 review run 求和" icon="◷"/><Summary label="账户范围" value={dashboard.accountUsage.supported ? `${dashboard.accountUsage.usedPercent}%` : "不可用"} detail="与 GUI 累计不相加" icon="◎"/></div></section>; }
-function SettingsPage({ status, concurrency, action, showPreview }: { status: RequirementsStatus; concurrency: number; action(work: () => Promise<unknown>): Promise<void>; showPreview(): void }) {
-  async function cleanGoneBranches() {
-    await action(async () => {
-      const scan = await window.reviewManager.scanGoneBranches();
-      const skippedText = scan.skipped.length ? `\n\n已跳过正在使用的分支：\n${scan.skipped.map((item) => `${item.repositoryName} · ${item.branch}（${item.reason}）`).join("\n")}` : "";
-      const errorText = scan.errors.length ? `\n\n扫描失败的目录：\n${scan.errors.map((item) => `${item.repositoryName}：${item.message}`).join("\n")}` : "";
-      if (!scan.candidates.length) { alert(`没有可安全清理的失效本地分支。${skippedText}${errorText}`); return; }
-      const list = scan.candidates.map((item) => `${item.repositoryName} · ${item.branch}（原上游 ${item.upstream}）`).join("\n");
-      if (!confirm(`将安全删除以下 ${scan.candidates.length} 个远程已删除的本地分支：\n\n${list}\n\n未合并的本地分支不会被强制删除。是否继续？${skippedText}${errorText}`)) return;
-      const result = await window.reviewManager.deleteGoneBranches(scan.candidates.map(({ repositoryId, branch }) => ({ repositoryId, branch })));
-      const failedText = result.failed.length ? `\n\n未删除：\n${result.failed.map((item) => `${item.repositoryName} · ${item.branch}：${item.reason}`).join("\n")}` : "";
-      alert(`清理完成：已删除 ${result.deleted.length} 个分支，未删除 ${result.failed.length} 个。${failedText}`);
-    });
+function ModelSetting({ label, description, value, dashboard, save }: { label: string; description: string; value: ReviewModelConfig; dashboard: DashboardDto; save(config: ReviewModelConfig): Promise<unknown> }) {
+  const selected = dashboard.models.find((model) => model.id === value.model);
+  const efforts = selected?.supportedReasoningEfforts.length ? selected.supportedReasoningEfforts : [value.reasoningEffort];
+  function selectModel(model: string) {
+    const option = dashboard.models.find((item) => item.id === model);
+    const reasoningEffort = option?.supportedReasoningEfforts.includes(value.reasoningEffort) ? value.reasoningEffort : option?.defaultReasoningEffort ?? (option?.supportedReasoningEfforts.includes("medium") ? "medium" : option?.supportedReasoningEfforts[0] ?? "medium");
+    return save({ model, reasoningEffort });
   }
-  return <section className="single-panel settings"><h2>默认审核要求</h2><dl><dt>状态</dt><dd>{status.state}</dd><dt>文件</dt><dd>{status.fileName ?? "未选择"}</dd><dt>完整路径</dt><dd>{status.filePath ?? "—"}</dd><dt>大小</dt><dd>{status.sizeBytes?.toLocaleString() ?? "—"} bytes</dd><dt>最近读取</dt><dd>{status.loadedAt ? new Date(status.loadedAt).toLocaleString() : "—"}</dd><dt>SHA-256</dt><dd className="mono">{status.sha256 ?? "—"}</dd></dl><div className="settings-actions"><button className="primary" onClick={() => action(() => window.reviewManager.selectRequirements())}>{status.fileName ? "替换文档" : "选择文档"}</button><button className="secondary" disabled={!status.fileName} onClick={() => action(() => window.reviewManager.reloadRequirements())}>重新读取</button><button className="secondary" disabled={!status.fileName} onClick={showPreview}>预览</button></div><p className="hint">每次审核都会在实际开始时重新读取、保存不可变快照并完整发送；内容越长，Token 消耗越高。</p><h2>审核调度</h2><label className="setting-field"><span>审核并发上限</span><select value={concurrency} onChange={(event) => void action(() => window.reviewManager.setConcurrency(Number(event.target.value)))}>{[1,2,3,4].map((value) => <option value={value} key={value}>{value}</option>)}</select><small>同时运行的审核数量；其余任务进入队列。每个目录的主干会根据远程默认分支自动识别。</small></label><h2>分支维护</h2><div className="branch-maintenance"><button className="secondary" onClick={() => void cleanGoneBranches()}>清理失效本地分支</button><small>刷新并清理远程已删除但本地仍保留的跟踪分支；当前分支、工作树占用分支及未合并分支不会删除。</small></div><h2>诊断</h2><button className="secondary" onClick={() => action(() => window.reviewManager.exportDiagnostics())}>导出脱敏诊断</button><h2>兼容性实验</h2><label className="disabled-toggle"><input type="checkbox" disabled /> 桌面左侧聊天栏互通（未验证，保持关闭）</label></section>;
+  return <label className="setting-field model-setting"><span>{label}</span><span className="model-selects"><select aria-label={`${label}模型`} value={value.model} onChange={(event) => void selectModel(event.target.value)}>{dashboard.models.map((model) => <option value={model.id} key={model.id}>{model.displayName}</option>)}</select><select aria-label={`${label}推理强度`} value={value.reasoningEffort} onChange={(event) => void save({ model: value.model, reasoningEffort: event.target.value as ReviewModelConfig["reasoningEffort"] })}>{efforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></span><small>{description}</small></label>;
+}
+
+function SettingsPage({ dashboard, action, showPreview }: { dashboard: DashboardDto; action(work: () => Promise<unknown>): Promise<void>; showPreview(): void }) {
+  const status = dashboard.requirements;
+  const [tab, setTab] = useState<"general" | "gitea">("general");
+  const [cleaningGoneBranches, setCleaningGoneBranches] = useState(false);
+  async function cleanGoneBranches() {
+    setCleaningGoneBranches(true);
+    try {
+      await action(async () => {
+        const scan = await window.reviewManager.scanGoneBranches();
+        const skippedText = scan.skipped.length ? `\n\n已跳过正在使用的分支：\n${scan.skipped.map((item) => `${item.repositoryName} · ${item.branch}（${item.reason}）`).join("\n")}` : "";
+        const errorText = scan.errors.length ? `\n\n扫描失败的目录：\n${scan.errors.map((item) => `${item.repositoryName}：${item.message}`).join("\n")}` : "";
+        if (!scan.candidates.length) { alert(`没有可安全清理的失效本地分支。${skippedText}${errorText}`); return; }
+        const list = scan.candidates.map((item) => `${item.repositoryName} · ${item.branch}（原上游 ${item.upstream}）`).join("\n");
+        if (!confirm(`将安全删除以下 ${scan.candidates.length} 个远程已删除的本地分支：\n\n${list}\n\n未合并的本地分支不会被强制删除。是否继续？${skippedText}${errorText}`)) return;
+        const result = await window.reviewManager.deleteGoneBranches(scan.candidates.map(({ repositoryId, branch }) => ({ repositoryId, branch })));
+        const failedText = result.failed.length ? `\n\n未删除：\n${result.failed.map((item) => `${item.repositoryName} · ${item.branch}：${item.reason}`).join("\n")}` : "";
+        alert(`清理完成：已删除 ${result.deleted.length} 个分支，未删除 ${result.failed.length} 个。${failedText}`);
+      });
+    } finally {
+      setCleaningGoneBranches(false);
+    }
+  }
+  return <section className="single-panel settings">
+    <nav className="settings-tabs" aria-label="设置分页"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>常规</button><button className={tab === "gitea" ? "active" : ""} onClick={() => setTab("gitea")}>Gitea</button></nav>
+    {tab === "gitea" ? <GiteaSettingsPage queryUrl={dashboard.giteaReviewQueryUrl} action={action} /> : <>
+      <h2>默认审核要求</h2><dl><dt>状态</dt><dd>{status.state}</dd><dt>文件</dt><dd>{status.fileName ?? "未选择"}</dd><dt>完整路径</dt><dd>{status.filePath ?? "—"}</dd><dt>大小</dt><dd>{status.sizeBytes?.toLocaleString() ?? "—"} bytes</dd><dt>最近读取</dt><dd>{status.loadedAt ? new Date(status.loadedAt).toLocaleString() : "—"}</dd><dt>SHA-256</dt><dd className="mono">{status.sha256 ?? "—"}</dd></dl>
+      <div className="settings-actions"><button className="primary" onClick={() => action(() => window.reviewManager.selectRequirements())}>{status.fileName ? "替换文档" : "选择文档"}</button><button className="secondary" disabled={!status.fileName} onClick={() => action(() => window.reviewManager.reloadRequirements())}>重新读取</button><button className="secondary" disabled={!status.fileName} onClick={showPreview}>预览</button></div>
+      <p className="hint">选择或手动重新读取时保存审核要求；后续审核使用已保存内容并为每轮生成不可变快照，不会自动读取源文件。内容越长，Token 消耗越高。</p>
+      <h2>模型配置</h2><ModelSetting label="审核分支默认模型" description="新分支在没有单独覆盖配置时使用；默认 gpt-5.6-sol · medium。" value={dashboard.defaultReviewModel} dashboard={dashboard} save={(config) => action(() => window.reviewManager.setDefaultReviewModel(config))} /><ModelSetting label="调用 MCP 默认模型" description="供需要模型参与的 MCP 编排、回执和评论任务使用；轮询本身不调用模型。默认 gpt-5.6-luna · max。" value={dashboard.defaultMcpModel} dashboard={dashboard} save={(config) => action(() => window.reviewManager.setDefaultMcpModel(config))} />
+      <h2>审核调度</h2><label className="setting-field"><span>审核并发上限</span><select value={dashboard.concurrency} onChange={(event) => void action(() => window.reviewManager.setConcurrency(Number(event.target.value)))}>{[1,2,3,4].map((value) => <option value={value} key={value}>{value}</option>)}</select><small>同时运行的审核数量；其余任务进入队列。每个目录的主干会根据远程默认分支自动识别。</small></label>
+      <h2>分支维护</h2><div className="branch-maintenance"><button className="secondary cleanup-button" disabled={cleaningGoneBranches} onClick={() => void cleanGoneBranches()}>清理失效本地分支{cleaningGoneBranches && <span className="button-spinner" aria-label="正在清理" />}</button><small>刷新并清理远程已删除但本地仍保留的跟踪分支；当前分支、工作树占用分支及未合并分支不会删除。</small></div>
+      <h2>诊断</h2><button className="secondary" onClick={() => action(() => window.reviewManager.exportDiagnostics())}>导出脱敏诊断</button><h2>兼容性实验</h2><label className="disabled-toggle"><input type="checkbox" disabled /> 桌面左侧聊天栏互通（未验证，保持关闭）</label>
+    </>}
+  </section>;
+}
+
+function GiteaSettingsPage({ queryUrl, action }: { queryUrl: string; action(work: () => Promise<unknown>): Promise<void> }) {
+  const [value, setValue] = useState(queryUrl);
+  useEffect(() => setValue(queryUrl), [queryUrl]);
+  const changed = value.trim() !== queryUrl;
+  return <div className="gitea-settings"><h2>Gitea 自动审核</h2><label><span>待审核 PR 查询地址</span><textarea rows={4} value={value} placeholder="https://gitea.company.com/api/v1/repos/issues/search?state=open&type=pulls&review_requested=true" onChange={(event) => setValue(event.target.value)} /><small>填写完整查询地址和固定筛选参数。运行时会覆盖 page 和 limit 参数进行分页；认证由 Gitea MCP 管理，请勿在地址中填写 token、账号或密码。</small></label><div className="settings-actions"><button className="primary" disabled={!changed} onClick={() => void action(() => window.reviewManager.setGiteaReviewQueryUrl(value.trim()))}>保存</button>{queryUrl && <button className="secondary" onClick={() => { setValue(""); void action(() => window.reviewManager.setGiteaReviewQueryUrl("")); }}>清除</button>}</div></div>;
 }

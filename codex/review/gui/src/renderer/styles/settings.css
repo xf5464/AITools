@@ -6,8 +6,85 @@
   color: #43516a;
 }
 
+.settings-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: #eef2f7;
+}
+
+.settings-tabs button {
+  min-width: 88px;
+  border: 0;
+  border-radius: 7px;
+  padding: 8px 16px;
+  background: transparent;
+  color: #6f7d94;
+  cursor: pointer;
+}
+
+.settings-tabs button.active {
+  background: #fff;
+  color: #1769e8;
+  box-shadow: 0 1px 4px #24324a1c;
+}
+
+.gitea-settings label {
+  display: grid;
+  grid-template-columns: 160px minmax(280px, 560px);
+  align-items: center;
+  gap: 10px 12px;
+  color: #43516a;
+}
+
+.gitea-settings textarea {
+  width: 100%;
+  min-height: 104px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid #dce3ed;
+  border-radius: 8px;
+  color: #40506a;
+  font: inherit;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.gitea-settings small {
+  grid-column: 2;
+  color: #8794a9;
+}
+
+.gitea-settings .settings-actions {
+  margin: 18px 0 0 172px;
+}
+
 .setting-field select {
   width: 90px;
+}
+
+.setting-field.model-setting {
+  grid-template-columns: 160px minmax(300px, 360px);
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.model-selects {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 92px;
+  gap: 8px;
+}
+
+.setting-field .model-selects select {
+  width: 100%;
+  max-width: none;
+}
+
+.setting-field.model-setting > small {
+  grid-column: 2;
+  line-height: 1.55;
 }
 
 .setting-field small {
@@ -23,6 +100,22 @@
 .branch-maintenance small {
   color: #8794a9;
   font-size: 11px;
+}
+
+.cleanup-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid #cbd8e9;
+  border-top-color: #1769e8;
+  border-radius: 50%;
+  animation: branch-refresh-spin .75s linear infinite;
 }
 
 .branch-review-config {

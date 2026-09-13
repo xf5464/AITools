@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { BrowserWindow, dialog, ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain, Notification } from "electron";
 import type { DashboardDto, GoneBranchDeleteDto, GoneBranchItemDto, GoneBranchScanDto, ReasoningEffort, RepositoryRowDto, ReviewModelOption, ReviewTarget } from "../../shared/contracts";
 import type { AppServerClient } from "../appServer/AppServerClient";
 import type { GitService } from "../git/GitService";
@@ -10,7 +10,7 @@ import type { ReviewService } from "../reviews/ReviewService";
 import type { TokenService } from "../tokens/TokenService";
 import { accountUsageFromNotification, accountUsageFromResponse } from "../tokens/accountUsage";
 import { buildBranchTokenUsage, buildTokenTrend } from "../tokens/tokenTrend";
-import { branchSchema, concurrencySchema, displayNameSchema, goneBranchDeleteSchema, idSchema, reviewModelConfigSchema, targetSchema, tokenGranularitySchema } from "./schemas";
+import { branchSchema, concurrencySchema, displayNameSchema, giteaReviewQueryUrlSchema, goneBranchDeleteSchema, idSchema, reviewModelConfigSchema, targetSchema, tokenGranularitySchema } from "./schemas";
 
 export class ApplicationController {
   private version = 0;
@@ -50,7 +50,7 @@ export class ApplicationController {
   async dashboard(): Promise<DashboardDto> {
     const requirementStatus = await this.requirements.getStatus();
     const repositories: RepositoryRowDto[] = this.db.listRepositories().map((repository) => { const localRuns = this.db.listReviewRuns(repository.id), active = localRuns.find((run) => ["starting","reviewing","recovering"].includes(run.status)), queued = this.reviews.isRepositoryQueued(repository.id), snapshot = this.snapshots.get(repository.id), branches = this.branches.get(repository.id) ?? [], branch = snapshot?.branch ?? null, identityRuns = snapshot?.repositoryKey && branch ? this.db.listReviewRunsByIdentity(snapshot.repositoryKey, branch) : [], latest = identityRuns[0], baseBranch = this.comparisonBranches.get(repository.id); const reviewStatus = queued ? "queued" : active?.status ?? (requirementStatus.state === "not_configured" ? "not_configured" : requirementStatus.state !== "valid" && requirementStatus.state !== "changed" ? "blocked_requirements" : latest?.status ?? "ready"); return { version: this.version, id: repository.id, displayName: repository.display_name, path: repository.canonical_path, baseBranch, enabled: Boolean(repository.enabled), snapshot, branches, reviewStatus, activeRun: active, latestRun: latest, repositoryTokens: this.tokens.getRepositoryBranchUsage(snapshot?.repositoryKey, branch), reviewModel: this.db.getBranchReviewConfig(repository.id, branch), completedReviewRounds: this.db.completedReviewRounds(snapshot?.repositoryKey, branch), comparisonError: this.comparisonErrors.get(repository.id), error: this.errors.get(repository.id) }; });
-    return { version: this.version, initialized: this.initialized, connection: this.appServer.process.state, connectionError: this.appServer.process.error, requirements: requirementStatus, repositories, managerTokens: this.tokens.getManagerUsage(), todayTokens: this.tokens.getTodayUsage(), activeReviews: this.reviews.queue.activeCount, queuedReviews: this.reviews.queue.queuedCount, concurrency: this.reviews.queue.concurrency, models: this.models, accountUsage: this.accountUsage };
+    return { version: this.version, initialized: this.initialized, connection: this.appServer.process.state, connectionError: this.appServer.process.error, requirements: requirementStatus, repositories, managerTokens: this.tokens.getManagerUsage(), todayTokens: this.tokens.getTodayUsage(), activeReviews: this.reviews.queue.activeCount, queuedReviews: this.reviews.queue.queuedCount, concurrency: this.reviews.queue.concurrency, models: this.models, defaultReviewModel: this.db.getDefaultReviewModel(), defaultMcpModel: this.db.getDefaultMcpModel(), giteaReviewQueryUrl: this.db.getSetting<string>("giteaReviewQueryUrl") ?? "", accountUsage: this.accountUsage };
   }
   async addRepository(path: string) { const snapshot = await this.git.inspect(path); const existing = this.db.listRepositories().find((r) => r.canonical_path.toLowerCase() === snapshot.canonicalPath.toLowerCase()); if (existing) return this.row(existing.id); const repository = this.db.addRepository(snapshot.canonicalPath, basename(snapshot.canonicalPath), snapshot.gitCommonDir); await this.refresh(repository.id); return this.row(repository.id); }
   async refreshBranches(id: string) { const repository = this.db.getRepository(id); if (!repository) throw new Error("目录不存在"); const result = await this.git.refreshRemoteBranches(repository.canonical_path); await this.refresh(id, false); return { repository: await this.row(id), newBranches: result.newBranches }; }
@@ -128,6 +128,9 @@ export function registerHandlers(controller: ApplicationController) {
   ipcMain.handle("dashboard:get", () => controller.dashboard());
   ipcMain.handle("appServer:retry", async () => { await controller.appServer.stop(); await controller.appServer.start(); await Promise.all([controller.loadModels(), controller.refreshAccountUsage()]); const dashboard = await controller.dashboard(); await controller.broadcast(); return dashboard; });
   ipcMain.handle("settings:setConcurrency", async (_event, value) => { const concurrency = concurrencySchema.parse(value); controller.db.setSetting("globalConcurrency", concurrency); controller.reviews.setConcurrency(concurrency); await controller.broadcast(); return controller.dashboard(); });
+  ipcMain.handle("settings:setDefaultReviewModel", async (_event, value) => { const config = reviewModelConfigSchema.parse(value); controller.db.saveDefaultReviewModel(config); await controller.broadcast(); return controller.dashboard(); });
+  ipcMain.handle("settings:setDefaultMcpModel", async (_event, value) => { const config = reviewModelConfigSchema.parse(value); controller.db.saveDefaultMcpModel(config); await controller.broadcast(); return controller.dashboard(); });
+  ipcMain.handle("settings:setGiteaReviewQueryUrl", async (_event, value) => { const url = giteaReviewQueryUrlSchema.parse(value); controller.db.setSetting("giteaReviewQueryUrl", url); await controller.broadcast(); return controller.dashboard(); });
   ipcMain.handle("settings:setBranchReviewModel", async (_event, repositoryId, branch, value) => { const id = idSchema.parse(repositoryId), parsedBranch = branchSchema.parse(branch), config = reviewModelConfigSchema.parse(value); if (!controller.db.getRepository(id)) throw new Error("目录记录不存在"); controller.db.saveBranchReviewConfig(id, parsedBranch, config); await controller.broadcast(); return controller.dashboard(); });
   ipcMain.handle("repositories:add", async () => { const result = await dialog.showOpenDialog({ properties: ["openDirectory"] }); if (result.canceled || !result.filePaths[0]) return null; const row = await controller.addRepository(result.filePaths[0]); await controller.broadcast(); return row; });
   ipcMain.handle("repositories:remove", async (_event, id) => { controller.db.removeRepository(idSchema.parse(id)); await controller.broadcast(); });
@@ -148,7 +151,14 @@ export function registerHandlers(controller: ApplicationController) {
   ipcMain.handle("branches:gone:scan", () => controller.scanGoneBranches());
   ipcMain.handle("branches:gone:delete", async (_event, items) => { const result = await controller.deleteGoneBranches(goneBranchDeleteSchema.parse(items)); await controller.broadcast(); return result; });
   ipcMain.handle("diagnostics:export", async () => { const result = await dialog.showSaveDialog({ defaultPath: `codex-review-manager-diagnostics-${new Date().toISOString().slice(0,10)}.json`, filters: [{ name: "JSON", extensions: ["json"] }] }); if (result.canceled || !result.filePath) return null; const dashboard = await controller.dashboard(); const safe = { generatedAt: new Date().toISOString(), appVersion: "0.1.0", connection: dashboard.connection, connectionError: dashboard.connectionError, requirements: { state: dashboard.requirements.state, fileName: dashboard.requirements.fileName, sha256: dashboard.requirements.sha256 }, repositories: dashboard.repositories.map((row) => ({ id: row.id, displayName: row.displayName, branch: row.snapshot?.branch, head: row.snapshot?.head, dirty: row.snapshot?.dirty, operation: row.snapshot?.operation, reviewStatus: row.reviewStatus, error: row.error })), runs: controller.db.listReviewRuns().map((run) => ({ ...run, requirementsSnapshot: undefined, requirementsPath: "[REDACTED]", resultText: undefined, partialText: undefined })) }; await writeFile(result.filePath, `${JSON.stringify(safe, null, 2)}\n`, "utf8"); return result.filePath; });
-  controller.reviews.on("event", (event) => BrowserWindow.getAllWindows().forEach((window) => window.webContents.send("review:event", event)));
+  controller.reviews.on("event", (event) => {
+    BrowserWindow.getAllWindows().forEach((window) => window.webContents.send("review:event", event));
+    if (event.type !== "completed" || !Notification.isSupported()) return;
+    const run = controller.db.getReviewRun(event.runId);
+    const notification = new Notification({ title: "审核已完成", body: run?.branch ? `${run.branch} 分支审核已完成，点击查看结果。` : "代码审核已完成，点击查看结果。", silent: false });
+    notification.on("click", () => { const window = BrowserWindow.getAllWindows()[0]; if (!window) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); });
+    notification.show();
+  });
   controller.reviews.on("changed", () => void controller.broadcast());
   controller.appServer.on("state", (state) => state === "ready" ? void controller.refreshAccountUsage() : void controller.broadcast());
 }

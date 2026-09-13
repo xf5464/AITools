@@ -14,6 +14,8 @@ let mainWindow: BrowserWindow | undefined;
 let database: Database | undefined;
 let appServer: AppServerClient | undefined;
 
+if (process.platform === "win32") app.setAppUserModelId("com.openai.codex-review-manager");
+
 async function createWindow() {
   mainWindow = new BrowserWindow({ width: 1440, height: 900, minWidth: 1024, minHeight: 720, title: "Codex Review Manager", backgroundColor: "#f5f7fb", webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   mainWindow.maximize();

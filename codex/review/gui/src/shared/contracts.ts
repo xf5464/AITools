@@ -33,7 +33,8 @@ export interface RepositoryRowDto {
 export interface DashboardDto {
   version: number; initialized: boolean; connection: ConnectionState; connectionError?: string; requirements: RequirementsStatus;
   repositories: RepositoryRowDto[]; managerTokens: number; todayTokens: number; activeReviews: number; queuedReviews: number;
-  concurrency: number; models: ReviewModelOption[]; accountUsage: { supported: boolean; usedPercent?: number; resetsAt?: number; message?: string };
+  concurrency: number; models: ReviewModelOption[]; defaultReviewModel: ReviewModelConfig; defaultMcpModel: ReviewModelConfig; giteaReviewQueryUrl: string;
+  accountUsage: { supported: boolean; usedPercent?: number; resetsAt?: number; message?: string };
 }
 export interface ReviewEvent { repositoryId: string; runId: string; type: string; at: string; text?: string; payload?: unknown }
 export type TokenGranularity = "day" | "week" | "month";
@@ -48,6 +49,9 @@ export interface CodexReviewManagerApi {
   dashboard(): Promise<DashboardDto>;
   retryConnection(): Promise<DashboardDto>;
   setConcurrency(value: number): Promise<DashboardDto>;
+  setDefaultReviewModel(config: ReviewModelConfig): Promise<DashboardDto>;
+  setDefaultMcpModel(config: ReviewModelConfig): Promise<DashboardDto>;
+  setGiteaReviewQueryUrl(url: string): Promise<DashboardDto>;
   setBranchReviewModel(repositoryId: string, branch: string, config: ReviewModelConfig): Promise<DashboardDto>;
   addRepository(): Promise<RepositoryRowDto | null>;
   removeRepository(repositoryId: string): Promise<void>;
